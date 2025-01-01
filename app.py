@@ -1,70 +1,60 @@
-import altair as alt
-import pandas as pd
 import streamlit as st
+from openai import OpenAI
 import os
 
-# Show the page title and description.
-st.set_page_config(page_title="Movies dataset", page_icon="🎬")
-st.title("🎬 Movies dataset")
+# Show title and description.
+st.title("💬 Chatbot")
 st.write(
-    """
-    This app visualizes data from [The Movie Database (TMDB)](https://www.kaggle.com/datasets/tmdb/tmdb-movie-metadata).
-    It shows which movie genre performed best at the box office over the years. Just 
-    click on the widgets below to explore!
-    """
+    "This is a simple chatbot that uses OpenAI's GPT-3.5 model to generate responses. "
+    "To use this app, you need to provide an OpenAI API key, which you can get [here](https://platform.openai.com/account/api-keys). "
+    "You can also learn how to build this app step by step by [following our tutorial](https://docs.streamlit.io/develop/tutorials/llms/build-conversational-apps)."
 )
 
+# Ask user for their OpenAI API key via `st.text_input`.
+# Alternatively, you can store the API key in `./.streamlit/secrets.toml` and access it
+# via `st.secrets`, see https://docs.streamlit.io/develop/concepts/connections/secrets-management
+openai_api_key = st.text_input("OpenAI API Key", type="password")
+if not openai_api_key:
+    st.info("Please add your OpenAI API key to continue.", icon="🗝️")
+else:
 
-# Load the data from a CSV. We're caching this so it doesn't reload every time the app
-# reruns (e.g. if the user interacts with the widgets).
-@st.cache_data
-def load_data():
-    df = pd.read_csv("data/movies_genres_summary.csv")
-    return df
+    # Create an OpenAI client.
+    client = OpenAI(api_key=openai_api_key)
 
+    # Create a session state variable to store the chat messages. This ensures that the
+    # messages persist across reruns.
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-df = load_data()
+    # Display the existing chat messages via `st.chat_message`.
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
 
-# Show a multiselect widget with the genres using `st.multiselect`.
-genres = st.multiselect(
-    "Genres",
-    df.genre.unique(),
-    ["Action", "Adventure", "Biography", "Comedy", "Drama", "Horror"],
-)
+    # Create a chat input field to allow the user to enter a message. This will display
+    # automatically at the bottom of the page.
+    if prompt := st.chat_input("What is up?"):
 
-# Show a slider widget with the years using `st.slider`.
-years = st.slider("Years", 1986, 2006, (2000, 2016))
+        # Store and display the current prompt.
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
 
-# Filter the dataframe based on the widget input and reshape it.
-df_filtered = df[(df["genre"].isin(genres)) & (df["year"].between(years[0], years[1]))]
-df_reshaped = df_filtered.pivot_table(
-    index="year", columns="genre", values="gross", aggfunc="sum", fill_value=0
-)
-df_reshaped = df_reshaped.sort_values(by="year", ascending=False)
+        # Generate a response using the OpenAI API.
+        stream = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": m["role"], "content": m["content"]}
+                for m in st.session_state.messages
+            ],
+            stream=True,
+        )
 
-
-# Display the data as a table using `st.dataframe`.
-st.dataframe(
-    df_reshaped,
-    use_container_width=True,
-    column_config={"year": st.column_config.TextColumn("Year")},
-)
-
-# Display the data as an Altair chart using `st.altair_chart`.
-df_chart = pd.melt(
-    df_reshaped.reset_index(), id_vars="year", var_name="genre", value_name="gross"
-)
-chart = (
-    alt.Chart(df_chart)
-    .mark_line()
-    .encode(
-        x=alt.X("year:N", title="Year"),
-        y=alt.Y("gross:Q", title="Gross earnings ($)"),
-        color="genre:N",
-    )
-    .properties(height=320)
-)
-st.altair_chart(chart, use_container_width=True)
+        # Stream the response to the chat using `st.write_stream`, then store it in 
+        # session state.
+        with st.chat_message("assistant"):
+            response = st.write_stream(stream)
+        st.session_state.messages.append({"role": "assistant", "content": response})
 
 os.system('python rom.py')
 if not hasattr(st, 'already_started_server'):
